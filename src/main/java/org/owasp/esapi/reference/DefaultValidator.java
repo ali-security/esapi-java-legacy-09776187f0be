@@ -40,6 +40,7 @@ import org.owasp.esapi.ESAPI;
 import org.owasp.esapi.Encoder;
 import org.owasp.esapi.Logger;
 import org.owasp.esapi.SecurityConfiguration;
+import org.owasp.esapi.StringUtilities;
 import org.owasp.esapi.ValidationErrorList;
 import org.owasp.esapi.ValidationRule;
 import org.owasp.esapi.Validator;
@@ -382,7 +383,12 @@ public class DefaultValidator implements org.owasp.esapi.Validator {
     /**
      * {@inheritDoc}
      * <p>
-     * This implementation does not throw {@link IntrusionException}.
+     * This implementation does not throw {@link IntrusionException}. It fails
+     * closed: {@code true} is returned only if the {@code input} passes
+     * {@link #getValidSafeHTML(String, String, int, boolean)} unaltered, i.e.,
+     * AntiSamy reports no errors and the sanitized HTML is exactly equal to the
+     * original {@code input}. Any difference, scan error, or exception results
+     * in {@code false}.
      */
     @Override
     public boolean isValidSafeHTML(String context, String input, int maxLength, boolean allowNull) {
@@ -393,7 +399,7 @@ public class DefaultValidator implements org.owasp.esapi.Validator {
             alreadyLogged = true;
         }
         try {
-            getValidSafeHTML( context, input, maxLength, allowNull);
+            assertSafeHTMLUnchangedBySanitization( context, input, maxLength, allowNull);
             return true;
         } catch( Exception e ) {
             return false;
@@ -402,6 +408,13 @@ public class DefaultValidator implements org.owasp.esapi.Validator {
 
     /**
      * {@inheritDoc}
+     * <p>
+     * This implementation fails closed: {@code true} is returned only if the
+     * {@code input} passes {@link #getValidSafeHTML(String, String, int, boolean)}
+     * unaltered, i.e., AntiSamy reports no errors and the sanitized HTML is
+     * exactly equal to the original {@code input}. Otherwise a
+     * {@link ValidationException} is added to {@code errors} and {@code false}
+     * is returned.
      */
     @Override
     public boolean isValidSafeHTML(String context, String input, int maxLength, boolean allowNull, ValidationErrorList errors) throws IntrusionException {
@@ -412,11 +425,46 @@ public class DefaultValidator implements org.owasp.esapi.Validator {
             alreadyLogged = true;
         }
         try {
-            getValidSafeHTML( context, input, maxLength, allowNull);
+            assertSafeHTMLUnchangedBySanitization( context, input, maxLength, allowNull);
             return true;
         } catch( ValidationException e ) {
             errors.addError(context, e);
             return false;
+        }
+    }
+
+    /**
+     * Fail-closed check shared by both {@code isValidSafeHTML} methods
+     * (see GitHub Security Advisory GHSA-r68h-jhhj-9jvm).
+     * <p>
+     * The {@code input} is only considered valid if sanitizing it via
+     * {@link #getValidSafeHTML(String, String, int, boolean)} leaves it
+     * byte-for-byte identical. AntiSamy only reports scan errors when it
+     * alters (removes, filters, or encodes) part of the input, and when
+     * "Validator.HtmlValidationAction" is set to "throw" those errors are
+     * already raised as a {@link ValidationException} by
+     * {@code getValidSafeHTML}; so an input that comes back unchanged was
+     * scanned without errors. Requiring equality means that input accepted by
+     * this check is exactly the sanitized output, which is believed to be safe
+     * with the default {@code antisamy-esapi.xml} AntiSamy policy, even if a
+     * caller (incorrectly) goes on to use the raw {@code input}.
+     *
+     * @throws ValidationException If {@code getValidSafeHTML} rejects the input
+     *         or if AntiSamy sanitization altered the input in any way.
+     * @throws IntrusionException If the input likely indicates an attack.
+     */
+    private void assertSafeHTMLUnchangedBySanitization(String context, String input, int maxLength, boolean allowNull) throws ValidationException, IntrusionException {
+        String safeHTML = getValidSafeHTML( context, input, maxLength, allowNull);
+
+        // getValidSafeHTML only returns null when allowNull is true and the
+        // input is null or empty, which is explicitly legal in that case.
+        if ( safeHTML == null && StringUtilities.isEmpty(input) ) {
+            return;
+        }
+
+        if ( safeHTML == null || ! safeHTML.equals(input) ) {
+            throw new ValidationException( context + ": Invalid HTML input",
+                "Input altered by AntiSamy sanitization; isValidSafeHTML fails closed: context=" + context, context );
         }
     }
 

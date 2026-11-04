@@ -286,40 +286,108 @@ public class HTMLValidationRuleCleanTest {
         System.out.println("testIsValidSafeHTML");
         Validator instance = ESAPI.validator();
 
+        // As of the fix for GHSA-r68h-jhhj-9jvm, isValidSafeHTML() fails closed even
+        // in "clean" mode: any input that AntiSamy has to alter is reported as invalid.
         assertTrue(instance.isValidSafeHTML("test", "<b>Jeff</b>", 100, false));
         assertTrue(instance.isValidSafeHTML("test", "<a href=\"http://www.aspectsecurity.com\">Aspect Security</a>", 100, false));
-        assertTrue(instance.isValidSafeHTML("test", "Test. <script>alert(document.cookie)</script>", 100, false));
-        assertTrue(instance.isValidSafeHTML("test", "Test. <div style={xss:expression(xss)}>", 100, false));
-        assertTrue(instance.isValidSafeHTML("test", "Test. <s%00cript>alert(document.cookie)</script>", 100, false));
-        assertTrue(instance.isValidSafeHTML("test", "Test. <s\tcript>alert(document.cookie)</script>", 100, false));
-        assertTrue(instance.isValidSafeHTML("test", "Test. <s\r\n\0cript>alert(document.cookie)</script>", 100, false));
+        assertFalse(instance.isValidSafeHTML("test", "Test. <script>alert(document.cookie)</script>", 100, false));
+        assertFalse(instance.isValidSafeHTML("test", "Test. <div style={xss:expression(xss)}>", 100, false));
+        assertFalse(instance.isValidSafeHTML("test", "Test. <s%00cript>alert(document.cookie)</script>", 100, false));
+        assertFalse(instance.isValidSafeHTML("test", "Test. <s\tcript>alert(document.cookie)</script>", 100, false));
+        assertFalse(instance.isValidSafeHTML("test", "Test. <s\r\n\0cript>alert(document.cookie)</script>", 100, false));
 
         ValidationErrorList errors = new ValidationErrorList();
         assertTrue(instance.isValidSafeHTML("test1", "<b>Jeff</b>", 100, false, errors));
         assertTrue(instance.isValidSafeHTML("test2", "<a href=\"http://www.aspectsecurity.com\">Aspect Security</a>", 100, false, errors));
-        assertTrue(instance.isValidSafeHTML("test3", "Test. <script>alert(document.cookie)</script>", 100, false, errors));
-        assertTrue(instance.isValidSafeHTML("test4", "Test. <div style={xss:expression(xss)}>", 100, false, errors));
-        assertTrue(instance.isValidSafeHTML("test5", "Test. <s%00cript>alert(document.cookie)</script>", 100, false, errors));
-        assertTrue(instance.isValidSafeHTML("test6", "Test. <s\tcript>alert(document.cookie)</script>", 100, false, errors));
-        assertTrue(instance.isValidSafeHTML("test7", "Test. <s\r\n\0cript>alert(document.cookie)</script>", 100, false, errors));
-        assertTrue(errors.size() == 0);
+        assertFalse(instance.isValidSafeHTML("test3", "Test. <script>alert(document.cookie)</script>", 100, false, errors));
+        assertFalse(instance.isValidSafeHTML("test4", "Test. <div style={xss:expression(xss)}>", 100, false, errors));
+        assertFalse(instance.isValidSafeHTML("test5", "Test. <s%00cript>alert(document.cookie)</script>", 100, false, errors));
+        assertFalse(instance.isValidSafeHTML("test6", "Test. <s\tcript>alert(document.cookie)</script>", 100, false, errors));
+        assertFalse(instance.isValidSafeHTML("test7", "Test. <s\r\n\0cript>alert(document.cookie)</script>", 100, false, errors));
+        assertTrue(errors.size() == 5);
 
         // Extracted from testIEConditionalComment().
+        errors = new ValidationErrorList();
         String input = "<!--[if gte IE 4]>\r\n <SCRIPT>alert('XSS');</SCRIPT>\r\n<![endif]-->";
         boolean isSafe = instance.isValidSafeHTML("test12", input, 100, false, errors);
-        assertTrue(instance.isValidSafeHTML("test12", input, 100, false, errors)); // Safe bc "" gets returned!!!
+        assertFalse(isSafe); // Not safe bc "" gets returned, which differs from the input!!!
+        assertTrue(errors.size() == 1);
 
         // Extracted from testNekoDOSWithAnHTMLComment()
         errors = new ValidationErrorList();
         input = "<!--><?a/";
-        assertTrue(instance.isValidSafeHTML("test11", input, 100, false, errors)); // Safe bc "" gets returned!!!
-        assertTrue(errors.size() == 0);
+        assertFalse(instance.isValidSafeHTML("test11", input, 100, false, errors)); // Not safe bc "" gets returned, which differs from the input!!!
+        assertTrue(errors.size() == 1);
 
-        // Extracted from testESAPI_CVE_2022_24891() 
+        // Extracted from testESAPI_CVE_2022_24891()
         String expectedSafeText = "This is safe from XSS. Trust us!";
         String badVoodoo = "<a href=\"javascript&#00058alert(1)>" + expectedSafeText + "</a>";
         boolean result = instance.isValidSafeHTML("CVE-2021-35043", badVoodoo, 200, false);
-        assertTrue( result );
+        assertFalse( result );
+    }
+
+    /**
+     * Exploit-style regression test for GitHub Security Advisory GHSA-r68h-jhhj-9jvm.
+     * With "Validator.HtmlValidationAction" set to "clean", AntiSamy only logs
+     * the problems it finds and returns the sanitized output, so previously
+     * {@code isValidSafeHTML} reported dangerous input as valid. It must now
+     * fail closed and only accept input that AntiSamy leaves unchanged.
+     *
+     * @deprecated because Validator.isValidSafeHTML is deprecated.
+     * @see org.owasp.esapi.Validator#isValidSafeHTML(String,String,int,boolean)
+     * @see org.owasp.esapi.Validator#isValidSafeHTML(String,String,int,boolean,org.owasp.esapi.ValidationErrorList)
+     */
+    @Deprecated
+    @Test
+    public void testIsValidSafeHTMLFailsClosed() {
+        System.out.println("testIsValidSafeHTMLFailsClosed");
+        Validator instance = ESAPI.validator();
+
+        String[] alteredByAntiSamy = {
+            "<script>alert(1)</script>",                                    // script tag
+            "<b onclick=\"alert(1)\">x</b>",                                // on* event handler
+            "<img src=x onerror=alert(1)>",                                 // on* event handler on unknown tag
+            "<a href=\"javascript:alert(1)\">x</a>",                        // javascript: URL
+            "<b>unclosed",                                                  // malformed (unbalanced) tag
+            "Test. <<div on<script></script>load=alert()",                  // malformed tags
+            "<noscript><!--</noscript><img src=x onerror=mxss(1)>-->"       // mutation XSS
+        };
+
+        for ( String input : alteredByAntiSamy ) {
+            assertFalse("isValidSafeHTML must fail closed for: " + input,
+                        instance.isValidSafeHTML("testFailsClosed", input, 100, false));
+        }
+
+        ValidationErrorList errors = new ValidationErrorList();
+        int i = 0;
+        for ( String input : alteredByAntiSamy ) {
+            String context = "testFailsClosed-" + i++;
+            assertFalse("isValidSafeHTML must fail closed for: " + input,
+                        instance.isValidSafeHTML(context, input, 100, false, errors));
+            assertNotNull("ValidationException must be recorded for: " + input, errors.getError(context));
+        }
+        assertEquals(alteredByAntiSamy.length, errors.size());
+
+        // Already clean HTML (left unchanged by AntiSamy) is still valid.
+        String[] alreadyClean = {
+            "<b>Jeff</b>",
+            "<p>Hello <i>world</i></p>",
+            "Hello world"
+        };
+        errors = new ValidationErrorList();
+        i = 0;
+        for ( String input : alreadyClean ) {
+            assertTrue("Already clean HTML must be valid: " + input,
+                       instance.isValidSafeHTML("testAlreadyClean", input, 100, false));
+            assertTrue("Already clean HTML must be valid: " + input,
+                       instance.isValidSafeHTML("testAlreadyClean-" + i++, input, 100, false, errors));
+        }
+        assertTrue(errors.isEmpty());
+
+        // Null / empty input handling is unchanged.
+        assertTrue(instance.isValidSafeHTML("testNull", null, 100, true));
+        assertTrue(instance.isValidSafeHTML("testEmpty", "", 100, true));
+        assertFalse(instance.isValidSafeHTML("testEmpty", "", 100, false));
     }
 
     // This test has been significantly changed because as on AntiSamy 1.7.4

@@ -171,4 +171,65 @@ public class HTMLValidationRuleThrowsTest {
         assertFalse(instance.isValidSafeHTML("test5", "Test. <s\r\n\0cript>alert(document.cookie)</script>", 100, false, errors));
         assertTrue( errors.size() == 5 );
     }
+
+    /**
+     * Exploit-style regression test for GitHub Security Advisory GHSA-r68h-jhhj-9jvm.
+     * Even with "Validator.HtmlValidationAction" set to "throw", AntiSamy alters
+     * some input (e.g., by balancing tags or encoding stray markup) without
+     * reporting an error, so {@code isValidSafeHTML} previously reported such
+     * input as valid. It must now fail closed and only accept input that
+     * AntiSamy leaves unchanged.
+     *
+     * @deprecated because Validator.isValidSafeHTML is deprecated.
+     * @see org.owasp.esapi.Validator#isValidSafeHTML(String,String,int,boolean)
+     * @see org.owasp.esapi.Validator#isValidSafeHTML(String,String,int,boolean,org.owasp.esapi.ValidationErrorList)
+     */
+    @Deprecated
+    @Test
+    public void testIsValidSafeHTMLFailsClosed() {
+        System.out.println("isValidSafeHTMLFailsClosed");
+        Validator instance = ESAPI.validator();
+        thrownEx = ExpectedException.none();    // Not expecting any exceptions here.
+
+        String[] alteredByAntiSamy = {
+            "<script>alert(1)</script>",                                    // script tag
+            "<b onclick=\"alert(1)\">x</b>",                                // on* event handler
+            "<img src=x onerror=alert(1)>",                                 // on* event handler on unknown tag
+            "<a href=\"javascript:alert(1)\">x</a>",                        // javascript: URL
+            "<b>unclosed",                                                  // malformed (unbalanced) tag
+            "Test. <<div on<script></script>load=alert()",                  // malformed tags
+            "<noscript><!--</noscript><img src=x onerror=mxss(1)>-->"       // mutation XSS
+        };
+
+        for ( String input : alteredByAntiSamy ) {
+            assertFalse("isValidSafeHTML must fail closed for: " + input,
+                        instance.isValidSafeHTML("testFailsClosed", input, 100, false));
+        }
+
+        ValidationErrorList errors = new ValidationErrorList();
+        int i = 0;
+        for ( String input : alteredByAntiSamy ) {
+            String context = "testFailsClosed-" + i++;
+            assertFalse("isValidSafeHTML must fail closed for: " + input,
+                        instance.isValidSafeHTML(context, input, 100, false, errors));
+            assertNotNull("ValidationException must be recorded for: " + input, errors.getError(context));
+        }
+        assertEquals(alteredByAntiSamy.length, errors.size());
+
+        // Already clean HTML (left unchanged by AntiSamy) is still valid.
+        String[] alreadyClean = {
+            "<b>Jeff</b>",
+            "<p>Hello <i>world</i></p>",
+            "Hello world"
+        };
+        errors = new ValidationErrorList();
+        i = 0;
+        for ( String input : alreadyClean ) {
+            assertTrue("Already clean HTML must be valid: " + input,
+                       instance.isValidSafeHTML("testAlreadyClean", input, 100, false));
+            assertTrue("Already clean HTML must be valid: " + input,
+                       instance.isValidSafeHTML("testAlreadyClean-" + i++, input, 100, false, errors));
+        }
+        assertTrue(errors.isEmpty());
+    }
 }

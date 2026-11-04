@@ -205,4 +205,43 @@ public class HTMLValidationRuleClasspathTest {
         assertFalse(instance.isValidSafeHTML("test5", "Test. <s\r\n\0cript>alert(document.cookie)</script>", 100, false, errors));
         assertTrue( errors.size() == 5 );
     }
+
+    /**
+     * Exploit-style regression test for GitHub Security Advisory GHSA-r68h-jhhj-9jvm.
+     * {@code isValidSafeHTML} must fail closed and only accept input that
+     * AntiSamy sanitization leaves unchanged.
+     *
+     * @deprecated because Validator.isValidSafeHTML is deprecated.
+     * @see org.owasp.esapi.Validator#isValidSafeHTML(String,String,int,boolean)
+     * @see org.owasp.esapi.Validator#isValidSafeHTML(String,String,int,boolean,org.owasp.esapi.ValidationErrorList)
+     */
+    @Deprecated
+    @Test
+    public void testIsValidSafeHTMLFailsClosed() {
+        System.out.println("isValidSafeHTMLFailsClosed");
+        Validator instance = ESAPI.validator();
+        thrownEx = ExpectedException.none();    // Not expecting any exceptions here.
+
+        String[] alteredByAntiSamy = {
+            "<script>alert(1)</script>",                                    // script tag
+            "<b onclick=\"alert(1)\">x</b>",                                // on* event handler
+            "<a href=\"javascript:alert(1)\">x</a>",                        // javascript: URL
+            "<b>unclosed",                                                  // malformed (unbalanced) tag
+            "Test. <<div on<script></script>load=alert()"                   // malformed tags
+        };
+
+        ValidationErrorList errors = new ValidationErrorList();
+        int i = 0;
+        for ( String input : alteredByAntiSamy ) {
+            assertFalse("isValidSafeHTML must fail closed for: " + input,
+                        instance.isValidSafeHTML("testFailsClosed", input, 100, false));
+            assertFalse("isValidSafeHTML must fail closed for: " + input,
+                        instance.isValidSafeHTML("testFailsClosed-" + i++, input, 100, false, errors));
+        }
+        assertEquals(alteredByAntiSamy.length, errors.size());
+
+        // Already clean HTML (left unchanged by AntiSamy) is still valid.
+        assertTrue(instance.isValidSafeHTML("testAlreadyClean", "<b>Jeff</b>", 100, false));
+        assertTrue(instance.isValidSafeHTML("testAlreadyClean", "Hello world", 100, false));
+    }
 }
